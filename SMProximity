@@ -1,0 +1,145 @@
+#!/usr/bin/php -q
+<?php
+require_once("logging.php");
+
+class SMProximity {
+
+	// Config
+
+	// Devices list
+	var $devicesWifi = array(
+		array("title" => "iPhone de Seb",
+		      "mac" => "68:09:27:cd:37:d3")
+	);
+
+	var $devicesBt = array(
+		array("title" => "iPhone de Seb",
+		      "mac" => "68:09:27:CD:37:D4")
+	);
+
+	var $interface = "eth0"; // Network interface to scan
+	var $wifiNetwork = "192.168.0.0/24"; // Network IP pattern to scan
+	var $pause = 7; // Wait after scan. Means more Scan over X seconds
+	var $maxAttempt = 8; // When detection failed, how many attempt before triggering the script
+	var $logPath = "/var/log/proximity.log"; // The log file
+	
+
+	// Class var
+	var $oldStatus = true;
+	var $log;
+	var $failAttempt = 0;
+
+
+	function __construct() {
+		$this->log = new Logging();
+		$this->log->lfile($this->logPath);
+		$this->msg("Starting script ".$this->getDateTime());
+	}
+
+	function __destruct() {
+		$this->msg("Stopping script ".$this->getDateTime());
+		$this->log->lclose();
+	}
+
+	function getDateTime() {
+		return date('d/m/Y H:i:s');
+	}
+	
+	function msg($message, $level = 1) {
+    	echo "$message\n";
+		if ($level < 3) {
+			$this->log->lwrite($message);
+		}
+	}
+
+	function scan() {
+
+		// Wifi
+		try {
+			$arpResult = @shell_exec("sudo arp-scan --interface=".$this->interface." ".$this->wifiNetwork);	
+			$found = false;
+			foreach($this->devicesWifi as $maca) {
+				if (strpos($arpResult, $maca["mac"])) {
+					$found = true;
+					$this->msg("Found device with Wifi (".$maca["title"].")", 3);
+				}
+			}
+		} catch (Exception $e) {
+		    $this->msg("Error in Wifi detection : ".$e->getMessage(), 0);
+		}
+	
+		
+		// Bluetooth
+		try {
+			if (!$found) {
+				foreach($this->devicesBt as $maca) {
+					$btConnectionResult = @shell_exec("l2ping ".$maca["mac"]." -c 3 -t 1000 2>&1");
+					if (strpos($btConnectionResult, "down") === false) {
+						$found = true;
+						$this->msg("Found device with Bluetooth (".$maca["title"].")", 3);
+					}
+				}
+			}
+		} catch (Exception $e) {
+		    $this->msg("Error in Bluetooth detection : ".$e->getMessage(), 0);
+		}	
+		
+		try {
+			if ($this->oldStatus != $found || ($this->failAttempt == $this->maxAttempt)) {
+				$this->oldStatus = $found;
+				if ($found) {
+					if ($this->failAttempt >= $this->maxAttempt) {
+						$this->detectionOk();
+					}
+				} else {
+					if ($this->failAttempt == $this->maxAttempt) {
+						$this->detectionKo();
+					}
+				}
+			} else {
+
+			}
+			
+			if (!$found) {
+				if ($this->failAttempt <= $this->maxAttempt) {
+					$this->failAttempt++;
+				}
+				$this->msg("Could not found any device (Attempt #".$this->failAttempt."/".$this->maxAttempt.")", 3);
+			} else {
+				$this->failAttempt = 0;
+			}
+		} catch (Exception $e) {
+		    $this->msg("Error in detection process : ".$e->getMessage(), 0);
+		}
+
+	}
+
+	function detectionOk() {
+		// Do your stuff when detection is Ok
+
+		$this->msg("Found device");
+	}
+	
+	function detectionKo() {
+		// Do your stuff when detection is NOT Ok
+
+		$this->msg("Oops device not found");
+	}
+
+	function start() {
+		try {
+			while(true) {
+				$this->scan();
+				sleep($this->pause);
+			}
+		} catch (Exception $e) {
+		    $this->msg("Error in loop process : ".$e->getMessage(), 0);
+		}
+	}
+
+}
+
+$obj = new SMProximity();
+$obj->start();
+
+?>
